@@ -586,6 +586,7 @@ mix_transformer_encoders = {
     "mit_radio": {
         "encoder": MixRadioTransformerEncoder,
         "params": dict(
+            in_chans=14,
             out_channels=(3, 0, 64, 128, 320, 512),
             patch_size=4,
             embed_dims=[64, 128, 320, 512],
@@ -620,6 +621,7 @@ mix_transformer_encoders = {
         "encoder": MixVisionTransformerEncoder,
         "pretrained_settings": {"imagenet": get_pretrained_cfg("mit_b1")},
         "params": dict(
+
             out_channels=(3, 0, 64, 128, 320, 512),
             patch_size=4,
             embed_dims=[64, 128, 320, 512],
