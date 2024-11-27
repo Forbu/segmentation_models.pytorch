@@ -544,6 +544,31 @@ class MixVisionTransformerEncoder(MixVisionTransformer, EncoderMixin):
         return super().load_state_dict(state_dict)
 
 
+
+class MixRadioTransformerEncoder(MixVisionTransformer, EncoderMixin):
+    def __init__(self, out_channels, depth=5, **kwargs):
+        super().__init__(**kwargs)
+        self._out_channels = out_channels
+        self._depth = depth
+        self._in_channels = 14
+
+    def make_dilated(self, *args, **kwargs):
+        raise ValueError("MixVisionTransformer encoder does not support dilated mode")
+
+    def set_in_channels(self, in_channels, *args, **kwargs):
+        if in_channels != 14:
+            raise ValueError(
+                "MixVisionTransformer encoder does not support in_channels setting other than 14"
+            )
+
+    def forward(self, x):
+        # create dummy output for the first block
+        B, C, H, W = x.shape
+        dummy = torch.empty([B, 0, H // 2, W // 2], dtype=x.dtype, device=x.device)
+
+        return [x, dummy] + self.forward_features(x)[: self._depth - 1]
+
+
 def get_pretrained_cfg(name):
     return {
         "url": "https://github.com/qubvel/segmentation_models.pytorch/releases/download/v0.0.2/{}.pth".format(
@@ -558,6 +583,22 @@ def get_pretrained_cfg(name):
 
 
 mix_transformer_encoders = {
+    "mit_radio": {
+        "encoder": MixRadioTransformerEncoder,
+        "params": dict(
+            out_channels=(3, 0, 64, 128, 320, 512),
+            patch_size=4,
+            embed_dims=[64, 128, 320, 512],
+            num_heads=[1, 2, 5, 8],
+            mlp_ratios=[4, 4, 4, 4],
+            qkv_bias=True,
+            norm_layer=partial(nn.LayerNorm, eps=1e-6),
+            depths=[2, 2, 2, 2],
+            sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0,
+            drop_path_rate=0.1,
+        ),
+    },
     "mit_b0": {
         "encoder": MixVisionTransformerEncoder,
         "pretrained_settings": {"imagenet": get_pretrained_cfg("mit_b0")},
