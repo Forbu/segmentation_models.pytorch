@@ -30,12 +30,15 @@ class SegmentationModel(torch.nn.Module, SMPHubMixin):
                 f"divisible by {output_stride}. Consider pad your images to shape ({new_h}, {new_w})."
             )
 
-    def forward(self, x):
+    def forward(self, x, context=None):
         """Sequentially pass `x` trough model`s encoder, decoder and heads"""
 
         self.check_input_shape(x)
 
-        features = self.encoder(x)
+        if context is None:
+            features = self.encoder(x)
+        else:
+            features = self.encoder(x, context)
         decoder_output = self.decoder(*features)
 
         masks = self.segmentation_head(decoder_output)

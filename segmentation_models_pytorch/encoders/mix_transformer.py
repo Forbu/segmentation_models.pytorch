@@ -267,10 +267,13 @@ class MixVisionTransformer(nn.Module):
         norm_layer=nn.LayerNorm,
         depths=[3, 4, 6, 3],
         sr_ratios=[8, 4, 2, 1],
+        context_dim=3,
     ):
         super().__init__()
         self.num_classes = num_classes
         self.depths = depths
+        self.context_dim = context_dim
+        self.embed_dims = embed_dims
 
         # patch_embed
         self.patch_embed1 = OverlapPatchEmbed(
@@ -386,6 +389,12 @@ class MixVisionTransformer(nn.Module):
         )
         self.norm4 = norm_layer(embed_dims[3])
 
+        # simple seqeuntial element for context enmbedding
+        # TODO
+        self.film_layer = nn.Sequential(
+            nn.Linear(self.context_dim, 32), nn.GELU(), nn.Linear(32, embed_dims[0] * 2)
+        )
+
         # classification head
         # self.head = nn.Linear(embed_dims[3], num_classes) if num_classes > 0 else nn.Identity()
 
@@ -449,12 +458,24 @@ class MixVisionTransformer(nn.Module):
             nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
         )
 
-    def forward_features(self, x):
+    def forward_features(self, x, context=None):
+        """
+        x is of size (Batch, Channel, W, H)
+        and context is (Batch, Context(3))
+        """
         B = x.shape[0]
         outs = []
 
         # stage 1
         x, H, W = self.patch_embed1(x)
+
+        if context != None:
+            context_embedding = self.film_layer(context).unsqueeze(1)
+            x = (
+                x * (1.0 + context_embedding[:, :, :self.embed_dims[0]])
+                + context_embedding[:, :, -self.embed_dims[0] :]
+            )
+
         for i, blk in enumerate(self.block1):
             x = blk(x, H, W)
         x = self.norm1(x)
@@ -487,8 +508,8 @@ class MixVisionTransformer(nn.Module):
 
         return outs
 
-    def forward(self, x):
-        x = self.forward_features(x)
+    def forward(self, x, context=None):
+        x = self.forward_features(x, context)
         # x = self.head(x)
 
         return x
@@ -544,7 +565,6 @@ class MixVisionTransformerEncoder(MixVisionTransformer, EncoderMixin):
         return super().load_state_dict(state_dict)
 
 
-
 class MixRadioTransformerEncoder(MixVisionTransformer, EncoderMixin):
     def __init__(self, out_channels, depth=5, **kwargs):
         super().__init__(**kwargs)
@@ -561,12 +581,15 @@ class MixRadioTransformerEncoder(MixVisionTransformer, EncoderMixin):
                 "MixVisionTransformer encoder does not support in_channels setting other than 14"
             )
 
-    def forward(self, x):
+    def forward(self, x, context=None):
         # create dummy output for the first block
         B, C, H, W = x.shape
         dummy = torch.empty([B, 0, H // 2, W // 2], dtype=x.dtype, device=x.device)
 
-        return [x, dummy] + self.forward_features(x)[: self._depth - 1]
+        if context is None:
+            return [x, dummy] + self.forward_features(x)[: self._depth - 1]
+        else:
+            return [x, dummy] + self.forward_features(x, context)[: self._depth - 1]
 
 
 def get_pretrained_cfg(name):
@@ -586,6 +609,7 @@ mix_transformer_encoders = {
     "mit_radio": {
         "encoder": MixRadioTransformerEncoder,
         "params": dict(
+            context_dim=3,
             in_chans=14,
             out_channels=(3, 0, 64, 128, 320, 512),
             patch_size=4,
@@ -621,7 +645,6 @@ mix_transformer_encoders = {
         "encoder": MixVisionTransformerEncoder,
         "pretrained_settings": {"imagenet": get_pretrained_cfg("mit_b1")},
         "params": dict(
-
             out_channels=(3, 0, 64, 128, 320, 512),
             patch_size=4,
             embed_dims=[64, 128, 320, 512],
