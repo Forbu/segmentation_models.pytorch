@@ -125,7 +125,7 @@ def compute_rotation_embedding(q, rotation_first, rotation_second):
         torch.Tensor: Rotated query tensor size (B, N, C)
     """
 
-    q_rot = torch.cat([q[..., 1::2], -q[..., ::2]], dim=-1)
+    q_rot = torch.stack([q[..., 1::2], -q[..., ::2]], dim=-1).flatten(-2)
     q_embed = (
         q * rotation_first.unsqueeze(0).unsqueeze(0)
         + q_rot * rotation_second.unsqueeze(0).unsqueeze(0)
