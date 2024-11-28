@@ -56,6 +56,102 @@ class Mlp(nn.Module):
         return x
 
 
+def get_angle_flatten(dimension_hw):
+    """
+    Calculate polar angles for each pixel relative to the image center.
+
+    Args:
+        dimension_hw (int): Size of the square image (either 104, 52, 26, or 13)
+
+    Returns:
+        torch.Tensor: Flattened tensor of angles in radians relative to the image center
+    """
+    # Create coordinate grids
+    y, x = torch.meshgrid(
+        torch.arange(dimension_hw), torch.arange(dimension_hw), indexing="ij"
+    )
+
+    # Calculate center coordinates
+    center_y = (dimension_hw - 1) / 2
+    center_x = (dimension_hw - 1) / 2
+
+    # Calculate relative coordinates from center
+    y_from_center = y - center_y
+    x_from_center = x - center_x
+
+    # Calculate angles using arctan2
+    angles = torch.atan2(y_from_center, x_from_center)
+
+    # Flatten the angles tensor
+    angles_flat = angles.flatten()
+
+    return angles_flat
+
+
+def get_rotation_matrices(angle, freq_array):
+    """
+    Get rotation matrices for a given angle and frequency array
+
+    Args:
+        angle (torch.Tensor): Angle tensor size (N)
+        freq_array (torch.Tensor): Frequency array (size dim)
+
+    Returns:
+        torch.Tensor: Rotation matrices size (N, size dim)
+    """
+
+    rotation_first = torch.cos(angle[:, None] * freq_array[None, :])
+    rotation_second = torch.sin(angle[:, None] * freq_array[None, :])
+
+    return rotation_first, rotation_second
+
+
+def compute_rotation_embedding(q, rotation_first, rotation_second):
+    """
+    Compute rotation embedding for q
+
+    We want to rotate q by the rotation matrices
+
+    q_embed = q * rotation_first + q_rot * rotation_second
+
+    if q = [q0, q1, q2, q3 etc] then q_rot = [q2, -q1, q0, q3, etc]
+
+    Args:
+        q (torch.Tensor): Query tensor size (B, N, C)
+        rotation_first (torch.Tensor): Rotation first tensor size (N, C)
+        rotation_second (torch.Tensor): Rotation second tensor size (N, C)
+
+    Returns:
+        torch.Tensor: Rotated query tensor size (B, N, C)
+    """
+
+    q_rot = torch.cat([q[..., 1::2], -q[..., ::2]], dim=-1)
+    q_embed = (
+        q * rotation_first.unsqueeze(0).unsqueeze(0)
+        + q_rot * rotation_second.unsqueeze(0).unsqueeze(0)
+    )
+
+    return q_embed
+
+
+def get_freq_array(dim):
+    """
+    Get frequency array for a given dimension
+    """
+
+    # we only want to rotate half the features
+    index = torch.arange(dim // 2)
+
+    # frequency array
+    freq = torch.exp(index * -math.log(10000) / (dim // 2 - 1))
+
+    # interleave the frequency array to get the full frequency array
+    # [a, b] -> [a, a, b, b]
+    freq = torch.repeat_interleave(freq, 2, dim=-1)
+
+    return freq
+
+
 class Attention(nn.Module):
     def __init__(
         self,
@@ -88,6 +184,15 @@ class Attention(nn.Module):
             self.sr = nn.Conv2d(dim, dim, kernel_size=sr_ratio, stride=sr_ratio)
             self.norm = nn.LayerNorm(dim)
 
+        # Initialize caching attributes as None
+        self.register_buffer("angle_q", None)
+        self.register_buffer("angle_k", None)
+        self.register_buffer("freq_array", None)
+        self.register_buffer("rotation_first_q", None)
+        self.register_buffer("rotation_second_q", None)
+        self.register_buffer("rotation_first_k", None)
+        self.register_buffer("rotation_second_k", None)
+
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -107,6 +212,7 @@ class Attention(nn.Module):
 
     def forward(self, x, H, W):
         B, N, C = x.shape
+
         q = (
             self.q(x)
             .reshape(B, N, self.num_heads, C // self.num_heads)
@@ -115,8 +221,11 @@ class Attention(nn.Module):
 
         if self.sr_ratio > 1:
             x_ = x.permute(0, 2, 1).reshape(B, C, H, W)
-            x_ = self.sr(x_).reshape(B, C, -1).permute(0, 2, 1)
+            x_ = self.sr(x_)
+
+            x_ = x_.reshape(B, C, -1).permute(0, 2, 1)
             x_ = self.norm(x_)
+
             kv = (
                 self.kv(x_)
                 .reshape(B, -1, 2, self.num_heads, C // self.num_heads)
@@ -129,6 +238,50 @@ class Attention(nn.Module):
                 .permute(2, 0, 3, 1, 4)
             )
         k, v = kv[0], kv[1]
+
+        # Calculate angles if not already computed
+        if self.angle_q is None:
+            self.angle_q = get_angle_flatten(H)
+
+            # convert to device of q
+            self.angle_q = self.angle_q.to(q.device)
+
+        if self.angle_k is None:
+            k_size = int(math.sqrt(k.shape[2]))
+            self.angle_k = get_angle_flatten(k_size)
+
+            # convert to device of k
+            self.angle_k = self.angle_k.to(k.device)
+
+        # Get frequency array if not already computed
+        if self.freq_array is None:
+            self.freq_array = get_freq_array(C // self.num_heads)
+
+            # convert to device of q
+            self.freq_array = self.freq_array.to(q.device)
+
+        # Get rotation matrices if not already computed
+        if self.rotation_first_q is None or self.rotation_second_q is None:
+            self.rotation_first_q, self.rotation_second_q = get_rotation_matrices(
+                self.angle_q, self.freq_array
+            )
+
+            # convert to device of q
+            self.rotation_first_q = self.rotation_first_q.to(q.device)
+            self.rotation_second_q = self.rotation_second_q.to(q.device)
+
+        if self.rotation_first_k is None or self.rotation_second_k is None:
+            self.rotation_first_k, self.rotation_second_k = get_rotation_matrices(
+                self.angle_k, self.freq_array
+            )
+
+            # convert to device of k
+            self.rotation_first_k = self.rotation_first_k.to(k.device)
+            self.rotation_second_k = self.rotation_second_k.to(k.device)
+
+        # Apply rotation angle embedding using cached matrices
+        q = compute_rotation_embedding(q, self.rotation_first_q, self.rotation_second_q)
+        k = compute_rotation_embedding(k, self.rotation_first_k, self.rotation_second_k)
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
@@ -472,7 +625,7 @@ class MixVisionTransformer(nn.Module):
         if context != None:
             context_embedding = self.film_layer(context).unsqueeze(1)
             x = (
-                x * (1.0 + context_embedding[:, :, :self.embed_dims[0]])
+                x * context_embedding[:, :, : self.embed_dims[0]]
                 + context_embedding[:, :, -self.embed_dims[0] :]
             )
 
@@ -484,6 +637,7 @@ class MixVisionTransformer(nn.Module):
 
         # stage 2
         x, H, W = self.patch_embed2(x)
+
         for i, blk in enumerate(self.block2):
             x = blk(x, H, W)
         x = self.norm2(x)
@@ -492,6 +646,7 @@ class MixVisionTransformer(nn.Module):
 
         # stage 3
         x, H, W = self.patch_embed3(x)
+
         for i, blk in enumerate(self.block3):
             x = blk(x, H, W)
         x = self.norm3(x)
@@ -500,6 +655,7 @@ class MixVisionTransformer(nn.Module):
 
         # stage 4
         x, H, W = self.patch_embed4(x)
+
         for i, blk in enumerate(self.block4):
             x = blk(x, H, W)
         x = self.norm4(x)
