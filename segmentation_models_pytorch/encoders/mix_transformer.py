@@ -114,7 +114,7 @@ def compute_rotation_embedding(q, rotation_first, rotation_second):
 
     q_embed = q * rotation_first + q_rot * rotation_second
 
-    if q = [q0, q1, q2, q3 etc] then q_rot = [q2, -q1, q0, q3, etc]
+    if q = [q0, q1, q2, q3 etc] then q_rot = [q1, -q0, q3, -q2, etc]
 
     Args:
         q (torch.Tensor): Query tensor size (B, N, C)
