@@ -117,7 +117,7 @@ def compute_rotation_embedding(q, rotation_first, rotation_second):
     if q = [q0, q1, q2, q3 etc] then q_rot = [q1, -q0, q3, -q2, etc]
 
     Args:
-        q (torch.Tensor): Query tensor size (B, N, C)
+        q (torch.Tensor): Query tensor size (B, 1, N, C)
         rotation_first (torch.Tensor): Rotation first tensor size (N, C)
         rotation_second (torch.Tensor): Rotation second tensor size (N, C)
 
@@ -143,7 +143,7 @@ def get_freq_array(dim):
     index = torch.arange(dim // 2)
 
     # frequency array
-    freq = torch.exp(index * -math.log(10000) / (dim // 2 - 1))
+    freq = torch.exp(index * -math.log(10000) / (dim // 2 - 1)) * 100.
 
     # interleave the frequency array to get the full frequency array
     # [a, b] -> [a, a, b, b]
