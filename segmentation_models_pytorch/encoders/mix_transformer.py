@@ -143,7 +143,7 @@ def get_freq_array(dim):
     index = torch.arange(dim // 2)
 
     # frequency array
-    freq = torch.exp(index * -math.log(10000) / (dim // 2 - 1)) * 100.
+    freq = torch.exp(index * -math.log(10000) / (dim // 2 - 1)) * 300.
 
     # interleave the frequency array to get the full frequency array
     # [a, b] -> [a, a, b, b]
@@ -762,6 +762,24 @@ def get_pretrained_cfg(name):
 
 
 mix_transformer_encoders = {
+    "mit_radio_v0": {
+        "encoder": MixRadioTransformerEncoder,
+        "params": dict(
+            context_dim=3,
+            in_chans=14,
+            out_channels=(3, 0, 32, 64, 160, 256),
+            patch_size=4,
+            embed_dims=[32, 64, 160, 256],
+            num_heads=[1, 2, 5, 8],
+            mlp_ratios=[4, 4, 4, 4],
+            qkv_bias=True,
+            norm_layer=partial(nn.LayerNorm, eps=1e-6),
+            depths=[2, 2, 2, 2],
+            sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0,
+            drop_path_rate=0.1,
+        ),
+    },
     "mit_radio": {
         "encoder": MixRadioTransformerEncoder,
         "params": dict(
